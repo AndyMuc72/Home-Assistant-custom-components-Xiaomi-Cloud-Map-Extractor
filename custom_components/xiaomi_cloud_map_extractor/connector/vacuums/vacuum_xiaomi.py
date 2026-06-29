@@ -323,6 +323,8 @@ class XiaomiCloudVacuum(BaseXiaomiCloudVacuumV2):
     
     def additional_data(self: Self) -> dict[str, Any]:
         super_data = super().additional_data()
+        if self.model.startswith("xtl.vacuum."):
+            return super_data
         enc_key = gen_md5_key(
             self.model.replace("xiaomi", "mi"),
             str(self._device_id),
