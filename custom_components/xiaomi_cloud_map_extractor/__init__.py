@@ -47,6 +47,14 @@ _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: XiaomiCloudMapExtractorConfigEntry) -> bool:
+    used_api = VacuumApi(entry.data[CONF_USED_MAP_API])
+    detected_api = VacuumApi.detect(entry.data[CONF_MODEL])
+    if used_api == VacuumApi.UNSUPPORTED and detected_api != VacuumApi.UNSUPPORTED:
+        entry_data = dict(entry.data)
+        entry_data[CONF_USED_MAP_API] = detected_api.value
+        hass.config_entries.async_update_entry(entry, data=entry_data)
+        _LOGGER.info("Updated map API for %s to %s", entry.data[CONF_MODEL], detected_api.value)
+
     xcme_configuration = to_configuration(entry)
 
     def session_creator() -> ClientSession:
