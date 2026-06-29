@@ -57,7 +57,7 @@ AVAILABLE_APIS = {
     VacuumApi.VIOMI: ["viomi.vacuum."],
     VacuumApi.ROBOROCK: ["roborock.vacuum", "rockrobo.vacuum"],
     VacuumApi.IJAI: ["ijai.vacuum."],
-    VacuumApi.XIAOMI: ["xiaomi.vacuum."],
+    VacuumApi.XIAOMI: ["xiaomi.vacuum.", "xtl.vacuum."],
 }
 
 API_EXCEPTIONS = {
