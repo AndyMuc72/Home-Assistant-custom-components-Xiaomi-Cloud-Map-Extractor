@@ -19,6 +19,7 @@ from vacuum_map_parser_base.config.color import ColorsPalette, SupportedColor
 from vacuum_map_parser_base.config.drawable import Drawable
 from vacuum_map_parser_base.config.image_config import ImageConfig, TrimConfig
 from vacuum_map_parser_base.config.size import Sizes, Size
+from vacuum_map_parser_base.config.text import Text
 
 from .connector import XiaomiCloudMapExtractorConnector
 from .connector.model import XiaomiCloudMapExtractorConnectorConfiguration
@@ -37,7 +38,19 @@ from .const import (
     CONF_IMAGE_CONFIG_TRIM_RIGHT,
     CONF_IMAGE_CONFIG_TRIM_TOP,
     CONF_IMAGE_CONFIG_TRIM_BOTTOM,
-    CONF_ROOM_COLORS
+    CONF_ROOM_COLORS,
+    CONF_TEXTS,
+    CONF_TEXT_VALUE,
+    CONF_TEXT_X,
+    CONF_TEXT_Y,
+    CONF_TEXT_COLOR,
+    CONF_TEXT_FONT,
+    CONF_TEXT_FONT_SIZE,
+    CONF_AUTO_UPDATE,
+    CONF_SCAN_INTERVAL,
+    CONF_STORE_MAP_RAW,
+    CONF_STORE_MAP_IMAGE,
+    CONF_STORE_MAP_PATH,
 )
 from .coordinator import XiaomiCloudMapExtractorDataUpdateCoordinator
 from .store import restore_connector_config
@@ -62,7 +75,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: XiaomiCloudMapExtractorC
 
     connector_config = await restore_connector_config(hass, xcme_configuration.mac)
     xcme_connector = XiaomiCloudMapExtractorConnector(session_creator, xcme_configuration, connector_config)
-    xcme_update_coordinator = XiaomiCloudMapExtractorDataUpdateCoordinator(hass, xcme_connector)
+    xcme_connector.set_auto_updating(entry.options.get(CONF_AUTO_UPDATE, True))
+    xcme_update_coordinator = XiaomiCloudMapExtractorDataUpdateCoordinator(
+        hass,
+        xcme_connector,
+        update_interval_seconds=entry.options.get(CONF_SCAN_INTERVAL),
+        store_map_raw=entry.options.get(CONF_STORE_MAP_RAW, False),
+        store_map_image=entry.options.get(CONF_STORE_MAP_IMAGE, False),
+        store_map_path=entry.options.get(CONF_STORE_MAP_PATH, ""),
+        model=entry.data[CONF_MODEL],
+    )
     await xcme_update_coordinator.async_config_entry_first_refresh()
     entry.runtime_data = XiaomiCloudMapExtractorRuntimeData(xcme_update_coordinator)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -105,7 +127,17 @@ def to_configuration(entry: XiaomiCloudMapExtractorConfigEntry) -> XiaomiCloudMa
 
     drawables = [Drawable(e) for e in entry.options[CONF_DRAWABLES]]
     sizes = Sizes({Size(k): v for k, v in entry.options[CONF_SIZES].items()})
-    texts = []
+    texts = [
+        Text(
+            text[CONF_TEXT_VALUE],
+            text[CONF_TEXT_X],
+            text[CONF_TEXT_Y],
+            tuple(text[CONF_TEXT_COLOR]),
+            text.get(CONF_TEXT_FONT),
+            text.get(CONF_TEXT_FONT_SIZE),
+        )
+        for text in entry.options.get(CONF_TEXTS, [])
+    ]
 
     config = XiaomiCloudMapExtractorConnectorConfiguration(
         host,

@@ -6,7 +6,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
-from .const import CONTENT_TYPE
+from .const import CONTENT_TYPE, CONF_ATTRIBUTES, CONF_STORE_MAP_RAW
 from .coordinator import XiaomiCloudMapExtractorDataUpdateCoordinator
 from .entity import XiaomiCloudMapExtractorEntity
 from .types import XiaomiCloudMapExtractorConfigEntry
@@ -54,6 +54,8 @@ class XiaomiCloudMapExtractorCamera(XiaomiCloudMapExtractorEntity, Camera):
             entity_registry_enabled_default=False,
             entity_registry_visible_default=False,
         )
+        self._configured_attributes = config_entry.options.get(CONF_ATTRIBUTES, [])
+        self._store_map_raw = config_entry.options.get(CONF_STORE_MAP_RAW, False)
 
     @property
     def frame_interval(self: Self) -> float:
@@ -68,7 +70,33 @@ class XiaomiCloudMapExtractorCamera(XiaomiCloudMapExtractorEntity, Camera):
     @property
     def extra_state_attributes(self: Self) -> dict[str, Any]:
         attrs = super().extra_state_attributes
-        if (map_data := self._map_data()) is not None:
-            attrs["calibration_points"] = map_data.calibration()
-            attrs["rooms"] = {k: v.as_dict() for k, v in (map_data.rooms or {}).items()}
+        data = self._data()
+        if data is None or data.map_data is None:
+            return attrs
+        map_data = data.map_data
+        map_values = data.as_dict()["map_data"] or {}
+        rooms = {
+            room_id: room.name
+            for room_id, room in (map_data.rooms or {}).items()
+            if room_id is not None
+        }
+        if not any(rooms.values()):
+            rooms = list((map_data.rooms or {}).keys())
+        values = {
+            **map_values,
+            "calibration_points": map_values.get("calibration"),
+            "country": self._server,
+            "goto_predicted_path": map_values.get("predicted_path"),
+            "is_empty": map_data.image is None or map_data.image.is_empty,
+            "room_numbers": rooms,
+        }
+        attrs.update(
+            {
+                attribute: values.get(attribute)
+                for attribute in self._configured_attributes
+                if attribute in values
+            }
+        )
+        if self._store_map_raw:
+            attrs["map_saved"] = self.coordinator.map_saved
         return attrs

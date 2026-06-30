@@ -59,7 +59,6 @@ from .const import (
     CONF_IMAGE_CONFIG_TRIM_RIGHT,
     CONF_CAPTCHA_CODE,
     CONF_TWO_FACTOR_CODE,
-    NAME,
 )
 from .legacy import create_config_entry_data_from_yaml
 from .options_flow import XiaomiCloudMapExtractorOptionsFlowHandler
@@ -100,9 +99,25 @@ class XiaomiCloudMapExtractorFlowHandler(ConfigFlow, domain=DOMAIN):
             return async_create_clientsession(self.hass)
 
         data, options = await create_config_entry_data_from_yaml(import_info, session_creator)
-        self._async_abort_entries_match({CONF_HOST: import_info[CONF_HOST]})
+        existing_entry = next(
+            (
+                entry
+                for entry in self._async_current_entries(include_ignore=False)
+                if entry.data.get(CONF_HOST) == import_info[CONF_HOST]
+            ),
+            None,
+        )
+        if existing_entry is not None:
+            if existing_entry.data != data or existing_entry.options != options:
+                self.hass.config_entries.async_update_entry(
+                    existing_entry,
+                    title=data[CONF_NAME],
+                    data=data,
+                    options=options,
+                )
+            return self.async_abort(reason="already_configured")
         return self.async_create_entry(
-            title=NAME,
+            title=data[CONF_NAME],
             data=data,
             options=options,
         )

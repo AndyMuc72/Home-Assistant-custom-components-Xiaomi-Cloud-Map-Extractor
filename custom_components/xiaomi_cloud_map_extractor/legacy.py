@@ -18,7 +18,6 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.device_registry import format_mac
-from homeassistant.helpers.issue_registry import IssueSeverity, async_create_issue
 from homeassistant.helpers.typing import ConfigType
 
 from vacuum_map_parser_base.config.color import ColorsPalette
@@ -27,6 +26,12 @@ from vacuum_map_parser_base.config.image_config import ImageConfig
 from vacuum_map_parser_base.config.size import Sizes, Size
 
 from .const import (
+    CONF_ATTRIBUTES,
+    CONF_AUTO_UPDATE,
+    CONF_SCAN_INTERVAL,
+    CONF_STORE_MAP_IMAGE,
+    CONF_STORE_MAP_PATH,
+    CONF_STORE_MAP_RAW,
     CONF_USED_MAP_API,
     CONF_SERVER,
     CONF_COLORS,
@@ -41,9 +46,11 @@ from .const import (
     CONF_IMAGE_CONFIG_TRIM_BOTTOM,
     CONF_IMAGE_CONFIG_TRIM_TOP,
     CONF_IMAGE_CONFIG_TRIM_RIGHT,
+    DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
     NAME,
 )
+from .connector.vacuums.base.model import VacuumApi
 from .connector.xiaomi_cloud.connector import XiaomiCloudConnector, XiaomiCloudDeviceInfo
 
 
@@ -361,7 +368,7 @@ LEGACY_PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
         }),
         vol.Optional(LEGACY_CONF_STORE_MAP_RAW, default=False): cv.boolean,
         vol.Optional(LEGACY_CONF_STORE_MAP_IMAGE, default=False): cv.boolean,
-        vol.Optional(LEGACY_CONF_STORE_MAP_PATH, default=""): cv.string,
+        vol.Optional(LEGACY_CONF_STORE_MAP_PATH, default="/tmp"): cv.string,
         vol.Optional(LEGACY_CONF_FORCE_API, default=None): vol.Or(vol.In(LEGACY_CONF_AVAILABLE_APIS), vol.Equal(None))
     })
 
@@ -375,20 +382,6 @@ def handle_old_config(hass: HomeAssistant, config: ConfigType) -> None:
         )
     )
 
-    async_create_issue(
-        hass,
-        DOMAIN,
-        f"deprecated_yaml_{DOMAIN}",
-        is_fixable=False,
-        issue_domain=DOMAIN,
-        severity=IssueSeverity.WARNING,
-        translation_key="deprecated_yaml",
-        translation_placeholders={
-            "domain": DOMAIN,
-            "integration_title": NAME,
-        },
-    )
-
 
 async def create_config_entry_data_from_yaml(
     import_info: Mapping[str, Any], session_creator: Callable[[], ClientSession]
@@ -396,7 +389,7 @@ async def create_config_entry_data_from_yaml(
     device_id = None
     model = None
     mac = None
-    name = None
+    name = import_info[CONF_NAME]
     server = import_info.get(LEGACY_CONF_COUNTRY, None)
     connector = XiaomiCloudConnector(session_creator)
     try:
@@ -407,10 +400,25 @@ async def create_config_entry_data_from_yaml(
             device_id = device.device_id
             model = device.model
             mac = format_mac(device.mac)
-            name = device.name
             server = device.server
     except BaseException as e:
         _LOGGER.error("Failed to connect to Xiaomi Cloud", exc_info=e)
+
+    forced_api = import_info.get(LEGACY_CONF_FORCE_API)
+    used_api = (
+        VacuumApi[forced_api.upper()]
+        if forced_api is not None
+        else VacuumApi.detect(model or "")
+    )
+    drawables = import_info[LEGACY_CONF_DRAW]
+    if LEGACY_DRAWABLE_ALL in drawables:
+        drawables = [drawable.value for drawable in Drawable]
+    scan_interval = import_info.get(CONF_SCAN_INTERVAL, DEFAULT_UPDATE_INTERVAL)
+    scan_interval_seconds = (
+        scan_interval.total_seconds()
+        if hasattr(scan_interval, "total_seconds")
+        else float(scan_interval)
+    )
 
     data = {
         CONF_HOST: import_info[CONF_HOST],
@@ -422,7 +430,7 @@ async def create_config_entry_data_from_yaml(
         CONF_USERNAME: import_info[CONF_USERNAME],
         CONF_PASSWORD: import_info[CONF_PASSWORD],
         CONF_SERVER: server,
-        CONF_USED_MAP_API: import_info.get(LEGACY_CONF_FORCE_API, None),
+        CONF_USED_MAP_API: used_api.value,
     }
     options = {
         CONF_IMAGE_CONFIG: {
@@ -438,17 +446,11 @@ async def create_config_entry_data_from_yaml(
             **map_colors_map(ColorsPalette.COLORS),
             **map_colors_map(import_info[LEGACY_CONF_COLORS]),
         },
-        CONF_ROOM_COLORS: {},
-        CONF_DRAWABLES: [
-            e.value
-            for e in Drawable
-            if e not in [
-                Drawable.ROOM_NAMES,
-                Drawable.NO_CARPET_AREAS,
-                Drawable.IGNORED_OBSTACLES,
-                Drawable.IGNORED_OBSTACLES_WITH_PHOTO,
-            ]
-        ],
+        CONF_ROOM_COLORS: {
+            str(room_id): list(color)
+            for room_id, color in import_info[LEGACY_CONF_ROOM_COLORS].items()
+        },
+        CONF_DRAWABLES: [Drawable(drawable).value for drawable in drawables],
         CONF_SIZES: {
             **{k.value: v for k, v in Sizes.SIZES.items()},
             Size.VACUUM_RADIUS.value: import_info[LEGACY_CONF_SIZES][LEGACY_CONF_SIZE_VACUUM_RADIUS],
@@ -460,7 +462,23 @@ async def create_config_entry_data_from_yaml(
             Size.OBSTACLE_WITH_PHOTO_RADIUS.value: import_info[LEGACY_CONF_SIZES][LEGACY_CONF_SIZE_OBSTACLE_WITH_PHOTO_RADIUS],
             Size.CHARGER_RADIUS.value: import_info[LEGACY_CONF_SIZES][LEGACY_CONF_SIZE_CHARGER_RADIUS],
         },
-        CONF_TEXTS: [],
+        CONF_TEXTS: [
+            {
+                LEGACY_CONF_TEXT: text[LEGACY_CONF_TEXT],
+                LEGACY_CONF_X: text[LEGACY_CONF_X],
+                LEGACY_CONF_Y: text[LEGACY_CONF_Y],
+                LEGACY_CONF_COLOR: list(text[LEGACY_CONF_COLOR]),
+                LEGACY_CONF_FONT: text[LEGACY_CONF_FONT],
+                LEGACY_CONF_FONT_SIZE: text[LEGACY_CONF_FONT_SIZE],
+            }
+            for text in import_info[LEGACY_CONF_TEXTS]
+        ],
+        CONF_ATTRIBUTES: list(import_info[LEGACY_CONF_ATTRIBUTES]),
+        CONF_AUTO_UPDATE: import_info[LEGACY_CONF_AUTO_UPDATE],
+        CONF_SCAN_INTERVAL: scan_interval_seconds,
+        CONF_STORE_MAP_RAW: import_info[LEGACY_CONF_STORE_MAP_RAW],
+        CONF_STORE_MAP_IMAGE: import_info[LEGACY_CONF_STORE_MAP_IMAGE],
+        CONF_STORE_MAP_PATH: import_info[LEGACY_CONF_STORE_MAP_PATH],
     }
     return data, options
 
@@ -477,14 +495,14 @@ def default_image_config() -> dict[str, float]:
     }
 
 
-def default_colors() -> dict[str, tuple[int, int, int, int]]:
+def default_colors() -> dict[str, list[int]]:
     return map_colors_map(ColorsPalette.COLORS)
 
 
 def map_colors_map(
     data: dict[str, tuple[int, int, int] | tuple[int, int, int, int]],
-) -> dict[str, tuple[int, int, int, int]]:
+) -> dict[str, list[int]]:
     return {
-        k: ((v[0], v[1], v[2], v[3]) if len(v) == 4 else (v[0], v[1], v[2], 255))
+        k: ([v[0], v[1], v[2], v[3]] if len(v) == 4 else [v[0], v[1], v[2], 255])
         for k, v in data.items()
     }

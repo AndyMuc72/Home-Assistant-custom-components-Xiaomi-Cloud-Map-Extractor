@@ -49,4 +49,11 @@ CONF_TEXT_COLOR: Final = "color"
 CONF_TEXT_FONT: Final = "font"
 CONF_TEXT_FONT_SIZE: Final = "font_size"
 
+CONF_ATTRIBUTES: Final = "attributes"
+CONF_AUTO_UPDATE: Final = "auto_update"
+CONF_SCAN_INTERVAL: Final = "scan_interval"
+CONF_STORE_MAP_RAW: Final = "store_map_raw"
+CONF_STORE_MAP_IMAGE: Final = "store_map_image"
+CONF_STORE_MAP_PATH: Final = "store_map_path"
+
 STORAGE_VERSION: Final = 1
