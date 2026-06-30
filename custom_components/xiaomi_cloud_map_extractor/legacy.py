@@ -384,25 +384,32 @@ def handle_old_config(hass: HomeAssistant, config: ConfigType) -> None:
 
 
 async def create_config_entry_data_from_yaml(
-    import_info: Mapping[str, Any], session_creator: Callable[[], ClientSession]
+    import_info: Mapping[str, Any],
+    session_creator: Callable[[], ClientSession],
+    fallback_data: Mapping[str, Any] | None = None,
 ) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
-    device_id = None
-    model = None
-    mac = None
+    fallback_data = fallback_data or {}
+    device_id = fallback_data.get(CONF_DEVICE_ID)
+    model = fallback_data.get(CONF_MODEL)
+    mac = fallback_data.get(CONF_MAC)
     name = import_info[CONF_NAME]
-    server = import_info.get(LEGACY_CONF_COUNTRY, None)
-    connector = XiaomiCloudConnector(session_creator)
-    try:
-        await connector.login_with_credentials(import_info[CONF_USERNAME], import_info[CONF_PASSWORD])
+    server = import_info.get(LEGACY_CONF_COUNTRY) or fallback_data.get(CONF_SERVER)
+    if any(value is None for value in (device_id, model, mac)):
+        connector = XiaomiCloudConnector(session_creator)
+        await connector.login_with_credentials(
+            import_info[CONF_USERNAME], import_info[CONF_PASSWORD]
+        )
         devices = await connector.get_devices(server)
-        device: XiaomiCloudDeviceInfo | None = next(filter(lambda d: d.token == import_info[CONF_TOKEN], devices), None)
-        if device is not None:
-            device_id = device.device_id
-            model = device.model
-            mac = format_mac(device.mac)
-            server = device.server
-    except BaseException as e:
-        _LOGGER.error("Failed to connect to Xiaomi Cloud", exc_info=e)
+        device: XiaomiCloudDeviceInfo | None = next(
+            filter(lambda d: d.token == import_info[CONF_TOKEN], devices),
+            None,
+        )
+        if device is None:
+            raise RuntimeError("Vacuum matching the configured token was not found")
+        device_id = device.device_id
+        model = device.model
+        mac = format_mac(device.mac)
+        server = device.server
 
     forced_api = import_info.get(LEGACY_CONF_FORCE_API)
     used_api = (

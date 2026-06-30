@@ -9,6 +9,7 @@ import voluptuous as vol
 from aiohttp import ClientSession
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult, SOURCE_REAUTH
 from homeassistant.const import (
+    CONNECTION_NETWORK_MAC,
     CONF_DEVICE_ID,
     CONF_HOST,
     CONF_MAC,
@@ -20,6 +21,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import format_mac
 from homeassistant.helpers.selector import (
     SelectOptionDict,
@@ -98,7 +100,6 @@ class XiaomiCloudMapExtractorFlowHandler(ConfigFlow, domain=DOMAIN):
         def session_creator() -> ClientSession:
             return async_create_clientsession(self.hass)
 
-        data, options = await create_config_entry_data_from_yaml(import_info, session_creator)
         existing_entry = next(
             (
                 entry
@@ -107,6 +108,43 @@ class XiaomiCloudMapExtractorFlowHandler(ConfigFlow, domain=DOMAIN):
             ),
             None,
         )
+        fallback_data = dict(existing_entry.data) if existing_entry is not None else {}
+        if existing_entry is not None and any(
+            fallback_data.get(key) is None
+            for key in (CONF_DEVICE_ID, CONF_MODEL, CONF_MAC)
+        ):
+            registry = dr.async_get(self.hass)
+            devices = dr.async_entries_for_config_entry(registry, existing_entry.entry_id)
+            if devices:
+                device = devices[0]
+                fallback_data[CONF_MODEL] = fallback_data.get(CONF_MODEL) or device.model
+                fallback_data[CONF_MAC] = fallback_data.get(CONF_MAC) or next(
+                    (
+                        value
+                        for connection_type, value in device.connections
+                        if connection_type == CONNECTION_NETWORK_MAC
+                    ),
+                    None,
+                )
+                fallback_data[CONF_DEVICE_ID] = fallback_data.get(CONF_DEVICE_ID) or next(
+                    (
+                        identifier
+                        for domain, identifier in device.identifiers
+                        if domain == DOMAIN
+                    ),
+                    None,
+                )
+        try:
+            data, options = await create_config_entry_data_from_yaml(
+                import_info,
+                session_creator,
+                fallback_data=fallback_data,
+            )
+        except Exception:
+            _LOGGER.warning(
+                "Unable to import YAML configuration without an existing authenticated device"
+            )
+            return self.async_abort(reason="cannot_connect")
         if existing_entry is not None:
             if existing_entry.data != data or existing_entry.options != options:
                 self.hass.config_entries.async_update_entry(
