@@ -9,7 +9,6 @@ import voluptuous as vol
 from aiohttp import ClientSession
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult, SOURCE_REAUTH
 from homeassistant.const import (
-    CONNECTION_NETWORK_MAC,
     CONF_DEVICE_ID,
     CONF_HOST,
     CONF_MAC,
@@ -122,7 +121,7 @@ class XiaomiCloudMapExtractorFlowHandler(ConfigFlow, domain=DOMAIN):
                     (
                         value
                         for connection_type, value in device.connections
-                        if connection_type == CONNECTION_NETWORK_MAC
+                        if connection_type == dr.CONNECTION_NETWORK_MAC
                     ),
                     None,
                 )
