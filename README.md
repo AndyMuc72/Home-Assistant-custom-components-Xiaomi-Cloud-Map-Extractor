@@ -23,7 +23,7 @@
 
 
 
-# Xiaomi Cloud Map Extractor
+# Xiaomi Cloud Map Extractor (TESTING for JONR)
 
 This custom integration provides a way to present a live view of a map for Xiaomi, Roborock, Viomi, Roidmi and Dreame vacuums.
 ([Supported devices](#supported-devices))
