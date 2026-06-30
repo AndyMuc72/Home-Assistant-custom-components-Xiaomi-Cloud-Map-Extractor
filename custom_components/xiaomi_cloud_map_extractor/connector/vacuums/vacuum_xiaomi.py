@@ -18,7 +18,6 @@ from ..utils.exceptions import FailedConnectionException
 _LOGGER = logging.getLogger(__name__)
 OFF_UPDATES = 3
 XTL_MODEL_PREFIX = "xtl.vacuum."
-XTL_DOCK_MARKER_DISTANCE = 14
 
 @dataclass
 class XiaomiVacuumPropertyMapping:
@@ -246,14 +245,10 @@ class XiaomiCloudVacuum(BaseXiaomiCloudVacuumV2):
         charge_pos = map_field.get("chargePos")
         if charge_pos:
             charger = self._json_from_text(charge_pos)
-            charger_point = Point(
+            map_data.charger = Point(
                 charger.get("x", 0),
                 charger.get("y", 0),
                 self._xtl_angle(charger.get("a", 0)),
-            )
-            map_data.charger = self._separate_xtl_dock_marker(
-                charger_point,
-                map_data.vacuum_position,
             )
 
         if map_data.image is not None and not map_data.image.is_empty:
@@ -280,29 +275,6 @@ class XiaomiCloudVacuum(BaseXiaomiCloudVacuumV2):
         if abs(angle) > 360:
             angle /= 100
         return angle
-
-    @staticmethod
-    def _separate_xtl_dock_marker(charger: Point, vacuum: Point | None) -> Point:
-        if vacuum is None:
-            return charger
-
-        dx = charger.x - vacuum.x
-        dy = charger.y - vacuum.y
-        distance = (dx * dx + dy * dy) ** 0.5
-        if distance >= XTL_DOCK_MARKER_DISTANCE:
-            return charger
-
-        if distance == 0:
-            dx = -1
-            dy = 0
-            distance = 1
-
-        factor = XTL_DOCK_MARKER_DISTANCE / distance
-        return Point(
-            vacuum.x + dx * factor,
-            vacuum.y + dy * factor,
-            charger.a,
-        )
 
     @staticmethod
     def _lz4_block_decompress(data: bytes, expected_size: int) -> bytes:

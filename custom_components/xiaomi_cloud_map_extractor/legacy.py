@@ -1,3 +1,5 @@
+from dataclasses import asdict, dataclass
+import hashlib
 from typing import Mapping, Any, Callable
 
 import logging
@@ -19,12 +21,14 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.device_registry import format_mac
 from homeassistant.helpers.issue_registry import IssueSeverity, async_create_issue
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.typing import ConfigType
 
-from vacuum_map_parser_base.config.color import ColorsPalette
+from vacuum_map_parser_base.config.color import ColorsPalette, SupportedColor
 from vacuum_map_parser_base.config.drawable import Drawable
-from vacuum_map_parser_base.config.image_config import ImageConfig
+from vacuum_map_parser_base.config.image_config import ImageConfig, TrimConfig
 from vacuum_map_parser_base.config.size import Sizes, Size
+from vacuum_map_parser_base.config.text import Text
 
 from .const import (
     CONF_USED_MAP_API,
@@ -44,7 +48,14 @@ from .const import (
     DOMAIN,
     NAME,
 )
-from .connector.xiaomi_cloud.connector import XiaomiCloudConnector, XiaomiCloudDeviceInfo
+from .connector.model import XiaomiCloudMapExtractorConnectorConfiguration
+from .connector.vacuums.base.model import VacuumApi
+from .connector.xiaomi_cloud.connector import (
+    XiaomiCloudConnector,
+    XiaomiCloudConnectorConfig,
+    XiaomiCloudDeviceInfo,
+)
+from .connector.utils.exceptions import DeviceNotFoundException
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -295,6 +306,15 @@ DEFAULT_SIZES = {
     LEGACY_CONF_SIZE_CHARGER_RADIUS: 6
 }
 
+YAML_STORAGE_VERSION = 1
+
+
+@dataclass
+class LegacyYamlRuntimeConfiguration:
+    connector: XiaomiCloudMapExtractorConnectorConfiguration
+    cloud: XiaomiCloudConnectorConfig
+    name: str
+
 COLOR_SCHEMA = vol.Or(
     vol.All(vol.Length(min=3, max=3), vol.ExactSequence((cv.byte, cv.byte, cv.byte)), vol.Coerce(tuple)),
     vol.All(vol.Length(min=4, max=4), vol.ExactSequence((cv.byte, cv.byte, cv.byte, cv.byte)), vol.Coerce(tuple))
@@ -387,6 +407,115 @@ def handle_old_config(hass: HomeAssistant, config: ConfigType) -> None:
             "domain": DOMAIN,
             "integration_title": NAME,
         },
+    )
+
+
+async def create_yaml_runtime_configuration(
+    hass: HomeAssistant,
+    config: Mapping[str, Any],
+    session_creator: Callable[[], ClientSession],
+) -> LegacyYamlRuntimeConfiguration:
+    """Create a direct YAML runtime without importing a config entry."""
+    store_key = hashlib.sha256(
+        f"{config[CONF_HOST]}:{config[CONF_TOKEN]}".encode("utf-8")
+    ).hexdigest()[:16]
+    store = Store(
+        hass,
+        YAML_STORAGE_VERSION,
+        f"{DOMAIN}_yaml_{store_key}",
+    )
+    stored = await store.async_load()
+
+    if stored:
+        device = XiaomiCloudDeviceInfo(**stored["device"])
+        cloud_config = XiaomiCloudConnectorConfig.from_dict(stored["cloud"])
+    else:
+        cloud = XiaomiCloudConnector(session_creator)
+        await cloud.login_with_credentials(config[CONF_USERNAME], config[CONF_PASSWORD])
+        devices = await cloud.get_devices(config.get(LEGACY_CONF_COUNTRY))
+        device = next(
+            (candidate for candidate in devices if candidate.token == config[CONF_TOKEN]),
+            None,
+        )
+        if device is None:
+            raise DeviceNotFoundException()
+        cloud.server = device.server
+        cloud_config = cloud.to_config()
+        await store.async_save(
+            {
+                "device": asdict(device),
+                "cloud": asdict(cloud_config),
+            }
+        )
+
+    map_transform = config[LEGACY_CONF_MAP_TRANSFORM]
+    trim = map_transform[LEGACY_CONF_TRIM]
+    image_config = ImageConfig(
+        map_transform[LEGACY_CONF_SCALE],
+        map_transform[LEGACY_CONF_ROTATE],
+        TrimConfig(
+            trim[LEGACY_CONF_LEFT],
+            trim[LEGACY_CONF_RIGHT],
+            trim[LEGACY_CONF_TOP],
+            trim[LEGACY_CONF_BOTTOM],
+        ),
+    )
+    colors = ColorsPalette(
+        {
+            SupportedColor(name): tuple(value)
+            for name, value in config[LEGACY_CONF_COLORS].items()
+        },
+        {
+            str(name): tuple(value)
+            for name, value in config[LEGACY_CONF_ROOM_COLORS].items()
+        },
+    )
+    requested_drawables = config[LEGACY_CONF_DRAW]
+    drawables = (
+        list(Drawable)
+        if LEGACY_DRAWABLE_ALL in requested_drawables
+        else [Drawable(name) for name in requested_drawables]
+    )
+    sizes = Sizes(
+        {
+            Size(name): value
+            for name, value in config[LEGACY_CONF_SIZES].items()
+        }
+    )
+    texts = [
+        Text(
+            item[LEGACY_CONF_TEXT],
+            item[LEGACY_CONF_X],
+            item[LEGACY_CONF_Y],
+            tuple(item[LEGACY_CONF_COLOR]),
+            item[LEGACY_CONF_FONT],
+            item[LEGACY_CONF_FONT_SIZE],
+        )
+        for item in config[LEGACY_CONF_TEXTS]
+    ]
+    forced_api = config.get(LEGACY_CONF_FORCE_API)
+    used_api = VacuumApi(forced_api.upper()) if forced_api else VacuumApi.detect(device.model)
+
+    connector_config = XiaomiCloudMapExtractorConnectorConfiguration(
+        config[CONF_HOST],
+        config[CONF_TOKEN],
+        config[CONF_USERNAME],
+        config[CONF_PASSWORD],
+        device.server,
+        used_api,
+        device.device_id,
+        format_mac(device.mac),
+        device.model,
+        image_config,
+        colors,
+        drawables,
+        sizes,
+        texts,
+    )
+    return LegacyYamlRuntimeConfiguration(
+        connector_config,
+        cloud_config,
+        config[CONF_NAME],
     )
 
 
