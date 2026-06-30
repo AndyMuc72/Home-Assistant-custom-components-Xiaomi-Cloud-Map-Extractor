@@ -56,6 +56,7 @@ from .connector.xiaomi_cloud.connector import (
     XiaomiCloudDeviceInfo,
 )
 from .connector.utils.exceptions import DeviceNotFoundException
+from .store import restore_connector_config
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -330,6 +331,7 @@ LEGACY_PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
         vol.Required(CONF_TOKEN): vol.All(str, vol.Length(min=32, max=32)),
         vol.Required(CONF_USERNAME): cv.string,
         vol.Required(CONF_PASSWORD): cv.string,
+        vol.Optional(CONF_MAC, default=None): vol.Or(cv.string, vol.Equal(None)),
         vol.Optional(LEGACY_CONF_COUNTRY, default=None): vol.Or(vol.In(LEGACY_CONF_AVAILABLE_COUNTRIES), vol.Equal(None)),
         vol.Optional(CONF_NAME, default=LEGACY_DEFAULT_NAME): cv.string,
         vol.Optional(LEGACY_CONF_AUTO_UPDATE, default=True): cv.boolean,
@@ -430,8 +432,34 @@ async def create_yaml_runtime_configuration(
         device = XiaomiCloudDeviceInfo(**stored["device"])
         cloud_config = XiaomiCloudConnectorConfig.from_dict(stored["cloud"])
     else:
-        cloud = XiaomiCloudConnector(session_creator)
-        await cloud.login_with_credentials(config[CONF_USERNAME], config[CONF_PASSWORD])
+        session_mac = config.get(CONF_MAC)
+        if session_mac is None:
+            existing_entry = next(
+                (
+                    entry
+                    for entry in hass.config_entries.async_entries(DOMAIN)
+                    if entry.data.get(CONF_TOKEN) == config[CONF_TOKEN]
+                ),
+                None,
+            )
+            if existing_entry is not None:
+                session_mac = existing_entry.data.get(CONF_MAC)
+
+        cloud_config = (
+            await restore_connector_config(hass, session_mac)
+            if session_mac
+            else None
+        )
+        cloud = (
+            await XiaomiCloudConnector.from_config(cloud_config, session_creator)
+            if cloud_config
+            else XiaomiCloudConnector(session_creator)
+        )
+        if not cloud.is_authenticated():
+            await cloud.login_with_credentials(
+                config[CONF_USERNAME],
+                config[CONF_PASSWORD],
+            )
         devices = await cloud.get_devices(config.get(LEGACY_CONF_COUNTRY))
         device = next(
             (candidate for candidate in devices if candidate.token == config[CONF_TOKEN]),

@@ -15,6 +15,7 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from .const import CONTENT_TYPE, DOMAIN as INTEGRATION_DOMAIN
 from .connector import XiaomiCloudMapExtractorConnector
+from .connector.utils.exceptions import CaptchaRequiredException
 from .coordinator import XiaomiCloudMapExtractorDataUpdateCoordinator
 from .entity import XiaomiCloudMapExtractorEntity
 from .types import XiaomiCloudMapExtractorConfigEntry
@@ -98,6 +99,11 @@ async def async_setup_platform(
         await coordinator.async_refresh()
         if not coordinator.last_update_success:
             raise PlatformNotReady("Initial Xiaomi map update failed")
+    except CaptchaRequiredException:
+        raise PlatformNotReady(
+            "Xiaomi Cloud requested a CAPTCHA. Add the device MAC to the YAML "
+            "configuration so the stored UI session can be reused."
+        ) from None
     except Exception as err:
         raise PlatformNotReady(
             f"Unable to initialize Xiaomi Cloud Map Extractor YAML camera: {err}"
