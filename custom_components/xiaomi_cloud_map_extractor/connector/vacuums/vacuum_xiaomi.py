@@ -18,6 +18,8 @@ from ..utils.exceptions import FailedConnectionException
 _LOGGER = logging.getLogger(__name__)
 OFF_UPDATES = 3
 XTL_MODEL_PREFIX = "xtl.vacuum."
+XTL_DOCK_MARKER_DISTANCE = 14
+XTL_DOCKED_DISTANCE = 8
 
 @dataclass
 class XiaomiVacuumPropertyMapping:
@@ -235,21 +237,38 @@ class XiaomiCloudVacuum(BaseXiaomiCloudVacuumV2):
             )
         map_data.cleaned_rooms = {int(room_number) - 10 + 3 for room_number in cleaned_areas}
 
-        if isinstance(position, dict):
-            map_data.vacuum_position = Point(
-                position.get("x", 0),
-                position.get("y", 0),
-                self._xtl_angle(position.get("a", 0)),
+        map_data.additional_parameters["xtl_raw_vacuum_position"] = position
+        if (
+            isinstance(position, dict)
+            and (position.get("x", 0) != 0 or position.get("y", 0) != 0)
+        ):
+            map_data.vacuum_position = self._xtl_device_point(
+                position,
+                x_origin,
+                y_offset,
             )
 
         charge_pos = map_field.get("chargePos")
         if charge_pos:
             charger = self._json_from_text(charge_pos)
-            map_data.charger = Point(
-                charger.get("x", 0),
-                charger.get("y", 0),
-                self._xtl_angle(charger.get("a", 0)),
+            map_data.additional_parameters["xtl_raw_charger_position"] = charger
+            charger_point = self._xtl_device_point(
+                charger,
+                x_origin,
+                y_offset,
             )
+            if map_data.vacuum_position is not None:
+                raw_distance = (
+                    (float(charger.get("x", 0)) - float(position.get("x", 0))) ** 2
+                    + (float(charger.get("y", 0)) - float(position.get("y", 0))) ** 2
+                ) ** 0.5
+                if raw_distance < XTL_DOCKED_DISTANCE:
+                    charger_point = Point(
+                        map_data.vacuum_position.x - XTL_DOCK_MARKER_DISTANCE,
+                        map_data.vacuum_position.y,
+                        charger_point.a,
+                    )
+            map_data.charger = charger_point
 
         if map_data.image is not None and not map_data.image.is_empty:
             self.map_data_parser._image_generator.draw_map(map_data)
@@ -275,6 +294,21 @@ class XiaomiCloudVacuum(BaseXiaomiCloudVacuumV2):
         if abs(angle) > 360:
             angle /= 100
         return angle
+
+    @staticmethod
+    def _xtl_device_point(
+        position: dict[str, Any],
+        x_origin: int,
+        y_offset: int,
+    ) -> Point:
+        """Convert JONR device axes to the map coordinate system."""
+        raw_x = float(position.get("x", 0))
+        raw_y = float(position.get("y", 0))
+        return Point(
+            raw_y + x_origin - y_offset,
+            raw_x + y_offset - x_origin,
+            XiaomiCloudVacuum._xtl_angle(position.get("a", 0)),
+        )
 
     @staticmethod
     def _lz4_block_decompress(data: bytes, expected_size: int) -> bytes:
